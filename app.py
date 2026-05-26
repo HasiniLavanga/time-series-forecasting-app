@@ -2,8 +2,11 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from prophet import Prophet
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import numpy as np
 
-# Page config
+# Page configuration
 st.set_page_config(
     page_title="Time Series Forecasting App",
     layout="wide"
@@ -12,9 +15,9 @@ st.set_page_config(
 # Title
 st.title("📈 Time Series Forecasting App")
 
-st.write("Upload a CSV file for forecasting.")
+st.write("Upload a CSV file for forecasting and model comparison.")
 
-# Upload CSV
+# File uploader
 uploaded_file = st.file_uploader(
     "Upload CSV File",
     type=["csv"]
@@ -22,14 +25,14 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    # Read dataset
+    # Read CSV file
     df = pd.read_csv(uploaded_file)
 
-    # Preview
+    # Dataset preview
     st.subheader("📋 Dataset Preview")
     st.dataframe(df.head())
 
-    # Select columns
+    # Column selection
     columns = df.columns.tolist()
 
     date_col = st.selectbox(
@@ -45,22 +48,25 @@ if uploaded_file is not None:
     # Convert date column
     df[date_col] = pd.to_datetime(df[date_col])
 
-    # Sort values
+    # Sort values by date
     df = df.sort_values(by=date_col)
 
-    # Visualization
-    st.subheader("📉 Time Series Visualization")
+    # Historical chart
+    st.subheader("📉 Historical Data")
 
-    fig = px.line(
+    historical_fig = px.line(
         df,
         x=date_col,
         y=target_col,
         title=f"{target_col} Over Time"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(
+        historical_fig,
+        use_container_width=True
+    )
 
-    # Forecast days
+    # Forecast days slider
     forecast_days = st.slider(
         "Select Forecast Days",
         min_value=7,
@@ -68,62 +74,177 @@ if uploaded_file is not None:
         value=30
     )
 
+    # =========================================
+    # PROPHET MODEL
+    # =========================================
+
+    st.subheader("🤖 Prophet Forecast")
+
     # Prepare data for Prophet
-    prophet_df = df[[date_col, target_col]]
+    prophet_df = df[[date_col, target_col]].copy()
 
     prophet_df.columns = ["ds", "y"]
 
-    # Train model
-    st.subheader("🤖 Training Prophet Model...")
+    # Convert target column to numeric
+    prophet_df["y"] = pd.to_numeric(
+        prophet_df["y"],
+        errors="coerce"
+    )
 
-    model = Prophet()
+    # Remove missing values
+    prophet_df = prophet_df.dropna()
 
-    model.fit(prophet_df)
+    # Train Prophet model
+    prophet_model = Prophet()
 
-    # Future dataframe
-    future = model.make_future_dataframe(
+    prophet_model.fit(prophet_df)
+
+    # Create future dataframe
+    future = prophet_model.make_future_dataframe(
         periods=forecast_days
     )
 
-    # Forecast
-    forecast = model.predict(future)
+    # Generate forecast
+    prophet_forecast = prophet_model.predict(future)
 
-    # Forecast preview
-    st.subheader("📊 Forecast Results")
+    # Forecast table
+    st.subheader("📊 Prophet Forecast Results")
 
     st.dataframe(
-        forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail()
+        prophet_forecast[
+            ["ds", "yhat", "yhat_lower", "yhat_upper"]
+        ].tail()
     )
 
-    # Forecast chart
-    st.subheader("📈 Forecast Visualization")
-
-    forecast_fig = px.line(
-        forecast,
+    # Prophet chart
+    prophet_fig = px.line(
+        prophet_forecast,
         x="ds",
         y="yhat",
-        title="Forecast Prediction"
+        title="Prophet Forecast"
     )
 
-    # Add confidence intervals
-    forecast_fig.add_scatter(
-        x=forecast["ds"],
-        y=forecast["yhat_upper"],
-        mode='lines',
-        name='Upper Bound'
+    # Add upper confidence interval
+    prophet_fig.add_scatter(
+        x=prophet_forecast["ds"],
+        y=prophet_forecast["yhat_upper"],
+        mode="lines",
+        name="Upper Bound"
     )
 
-    forecast_fig.add_scatter(
-        x=forecast["ds"],
-        y=forecast["yhat_lower"],
-        mode='lines',
-        name='Lower Bound'
+    # Add lower confidence interval
+    prophet_fig.add_scatter(
+        x=prophet_forecast["ds"],
+        y=prophet_forecast["yhat_lower"],
+        mode="lines",
+        name="Lower Bound"
     )
 
     st.plotly_chart(
-        forecast_fig,
+        prophet_fig,
         use_container_width=True
     )
+
+    # =========================================
+    # ARIMA MODEL
+    # =========================================
+
+    st.subheader("📈 ARIMA Forecast")
+
+    # Convert target column to numeric
+    series = pd.to_numeric(
+        df[target_col],
+        errors="coerce"
+    )
+
+    # Remove missing values
+    series = series.dropna()
+
+    # Train ARIMA model
+    arima_model = ARIMA(
+        series,
+        order=(5, 1, 0)
+    )
+
+    arima_model_fit = arima_model.fit()
+
+    # Generate ARIMA forecast
+    arima_forecast = arima_model_fit.forecast(
+        steps=forecast_days
+    )
+
+    # Create future dates
+    future_dates = pd.date_range(
+        start=df[date_col].max(),
+        periods=forecast_days + 1,
+        freq="D"
+    )[1:]
+
+    # Forecast dataframe
+    arima_df = pd.DataFrame({
+        "Date": future_dates,
+        "Forecast": arima_forecast
+    })
+
+    # ARIMA chart
+    arima_fig = px.line(
+        arima_df,
+        x="Date",
+        y="Forecast",
+        title="ARIMA Forecast"
+    )
+
+    st.plotly_chart(
+        arima_fig,
+        use_container_width=True
+    )
+
+    # =========================================
+    # MODEL EVALUATION
+    # =========================================
+
+    st.subheader("📊 Model Evaluation Metrics")
+
+    # Train-test split
+    train_size = int(len(series) * 0.8)
+
+    train = series[:train_size]
+
+    test = series[train_size:]
+
+    # Train evaluation model
+    eval_model = ARIMA(
+        train,
+        order=(5, 1, 0)
+    )
+
+    eval_model_fit = eval_model.fit()
+
+    # Predictions
+    predictions = eval_model_fit.forecast(
+        steps=len(test)
+    )
+
+    # Calculate metrics
+    mae = mean_absolute_error(
+        test,
+        predictions
+    )
+
+    rmse = np.sqrt(
+        mean_squared_error(
+            test,
+            predictions
+        )
+    )
+
+    # Metrics dataframe
+    metrics_df = pd.DataFrame({
+        "Metric": ["MAE", "RMSE"],
+        "Value": [mae, rmse]
+    })
+
+    st.table(metrics_df)
 
 else:
     st.info("Please upload a CSV file.")
