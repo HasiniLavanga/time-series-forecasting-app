@@ -4,35 +4,57 @@ import plotly.express as px
 from prophet import Prophet
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from xgboost import XGBRegressor
 import numpy as np
 
-# Page configuration
+# =========================================
+# PAGE CONFIGURATION
+# =========================================
+
 st.set_page_config(
     page_title="Time Series Forecasting App",
     layout="wide"
 )
 
-# Title
+# =========================================
+# TITLE
+# =========================================
+
 st.title("📈 Time Series Forecasting App")
 
-st.write("Upload a CSV file for forecasting and model comparison.")
+st.write(
+    "Multi-model forecasting using Prophet, ARIMA, and XGBoost."
+)
 
-# File uploader
+# =========================================
+# FILE UPLOADER
+# =========================================
+
 uploaded_file = st.file_uploader(
     "Upload CSV File",
     type=["csv"]
 )
 
+# =========================================
+# MAIN APPLICATION
+# =========================================
+
 if uploaded_file is not None:
 
-    # Read CSV file
+    # Read dataset
     df = pd.read_csv(uploaded_file)
 
-    # Dataset preview
+    # =========================================
+    # DATASET PREVIEW
+    # =========================================
+
     st.subheader("📋 Dataset Preview")
     st.dataframe(df.head())
 
-    # Column selection
+    # =========================================
+    # COLUMN SELECTION
+    # =========================================
+
     columns = df.columns.tolist()
 
     date_col = st.selectbox(
@@ -45,13 +67,32 @@ if uploaded_file is not None:
         columns
     )
 
-    # Convert date column
-    df[date_col] = pd.to_datetime(df[date_col])
+    # =========================================
+    # DATA CLEANING
+    # =========================================
 
-    # Sort values by date
+    # Convert date column
+    df[date_col] = pd.to_datetime(
+        df[date_col],
+        errors="coerce"
+    )
+
+    # Convert target column to numeric
+    df[target_col] = pd.to_numeric(
+        df[target_col],
+        errors="coerce"
+    )
+
+    # Remove missing values
+    df = df.dropna()
+
+    # Sort by date
     df = df.sort_values(by=date_col)
 
-    # Historical chart
+    # =========================================
+    # HISTORICAL VISUALIZATION
+    # =========================================
+
     st.subheader("📉 Historical Data")
 
     historical_fig = px.line(
@@ -66,7 +107,10 @@ if uploaded_file is not None:
         use_container_width=True
     )
 
-    # Forecast days slider
+    # =========================================
+    # FORECAST DAYS
+    # =========================================
+
     forecast_days = st.slider(
         "Select Forecast Days",
         min_value=7,
@@ -80,18 +124,23 @@ if uploaded_file is not None:
 
     st.subheader("🤖 Prophet Forecast")
 
-    # Prepare data for Prophet
     prophet_df = df[[date_col, target_col]].copy()
 
     prophet_df.columns = ["ds", "y"]
 
-    # Convert target column to numeric
+    # Ensure correct datetime format
+    prophet_df["ds"] = pd.to_datetime(
+        prophet_df["ds"],
+        errors="coerce"
+    )
+
+    # Ensure numeric target
     prophet_df["y"] = pd.to_numeric(
         prophet_df["y"],
         errors="coerce"
     )
 
-    # Remove missing values
+    # Remove invalid rows
     prophet_df = prophet_df.dropna()
 
     # Train Prophet model
@@ -101,13 +150,14 @@ if uploaded_file is not None:
 
     # Create future dataframe
     future = prophet_model.make_future_dataframe(
-        periods=forecast_days
+        periods=forecast_days,
+        freq="D"
     )
 
     # Generate forecast
     prophet_forecast = prophet_model.predict(future)
 
-    # Forecast table
+    # Forecast results table
     st.subheader("📊 Prophet Forecast Results")
 
     st.dataframe(
@@ -124,7 +174,7 @@ if uploaded_file is not None:
         title="Prophet Forecast"
     )
 
-    # Add upper confidence interval
+    # Confidence intervals
     prophet_fig.add_scatter(
         x=prophet_forecast["ds"],
         y=prophet_forecast["yhat_upper"],
@@ -132,7 +182,6 @@ if uploaded_file is not None:
         name="Upper Bound"
     )
 
-    # Add lower confidence interval
     prophet_fig.add_scatter(
         x=prophet_forecast["ds"],
         y=prophet_forecast["yhat_lower"],
@@ -151,16 +200,14 @@ if uploaded_file is not None:
 
     st.subheader("📈 ARIMA Forecast")
 
-    # Convert target column to numeric
     series = pd.to_numeric(
         df[target_col],
         errors="coerce"
     )
 
-    # Remove missing values
     series = series.dropna()
 
-    # Train ARIMA model
+    # Train ARIMA
     arima_model = ARIMA(
         series,
         order=(5, 1, 0)
@@ -168,7 +215,7 @@ if uploaded_file is not None:
 
     arima_model_fit = arima_model.fit()
 
-    # Generate ARIMA forecast
+    # Forecast
     arima_forecast = arima_model_fit.forecast(
         steps=forecast_days
     )
@@ -200,19 +247,95 @@ if uploaded_file is not None:
     )
 
     # =========================================
-    # MODEL EVALUATION
+    # XGBOOST MODEL
     # =========================================
 
-    st.subheader("📊 Model Evaluation Metrics")
+    st.subheader("⚡ XGBoost Forecast")
+
+    # Create separate dataframe
+    xgb_df = pd.DataFrame()
+
+    # Add target column
+    xgb_df["target"] = df[target_col]
+
+    # Create lag features
+    xgb_df["lag_1"] = xgb_df["target"].shift(1)
+
+    xgb_df["lag_2"] = xgb_df["target"].shift(2)
+
+    xgb_df["lag_3"] = xgb_df["target"].shift(3)
+
+    # Remove missing rows
+    xgb_df = xgb_df.dropna()
+
+    # Features and target
+    X = xgb_df[["lag_1", "lag_2", "lag_3"]]
+
+    y = xgb_df["target"]
 
     # Train-test split
+    split_size = int(len(X) * 0.8)
+
+    X_train = X[:split_size]
+
+    X_test = X[split_size:]
+
+    y_train = y[:split_size]
+
+    y_test = y[split_size:]
+
+    # Train model
+    xgb_model = XGBRegressor()
+
+    xgb_model.fit(X_train, y_train)
+
+    # Predictions
+    xgb_predictions = xgb_model.predict(X_test)
+
+    # Metrics
+    xgb_mae = mean_absolute_error(
+        y_test,
+        xgb_predictions
+    )
+
+    xgb_rmse = np.sqrt(
+        mean_squared_error(
+            y_test,
+            xgb_predictions
+        )
+    )
+
+    # Results dataframe
+    xgb_results = pd.DataFrame({
+        "Actual": y_test.values,
+        "Predicted": xgb_predictions
+    })
+
+    # XGBoost chart
+    xgb_fig = px.line(
+        xgb_results,
+        title="XGBoost Predictions"
+    )
+
+    st.plotly_chart(
+        xgb_fig,
+        use_container_width=True
+    )
+
+    # =========================================
+    # MODEL COMPARISON
+    # =========================================
+
+    st.subheader("📊 Model Comparison Metrics")
+
+    # Train-test split for ARIMA
     train_size = int(len(series) * 0.8)
 
     train = series[:train_size]
 
     test = series[train_size:]
 
-    # Train evaluation model
+    # ARIMA evaluation
     eval_model = ARIMA(
         train,
         order=(5, 1, 0)
@@ -220,28 +343,28 @@ if uploaded_file is not None:
 
     eval_model_fit = eval_model.fit()
 
-    # Predictions
-    predictions = eval_model_fit.forecast(
+    arima_predictions = eval_model_fit.forecast(
         steps=len(test)
     )
 
-    # Calculate metrics
-    mae = mean_absolute_error(
+    # ARIMA metrics
+    arima_mae = mean_absolute_error(
         test,
-        predictions
+        arima_predictions
     )
 
-    rmse = np.sqrt(
+    arima_rmse = np.sqrt(
         mean_squared_error(
             test,
-            predictions
+            arima_predictions
         )
     )
 
-    # Metrics dataframe
+    # Metrics table
     metrics_df = pd.DataFrame({
-        "Metric": ["MAE", "RMSE"],
-        "Value": [mae, rmse]
+        "Model": ["ARIMA", "XGBoost"],
+        "MAE": [arima_mae, xgb_mae],
+        "RMSE": [arima_rmse, xgb_rmse]
     })
 
     st.table(metrics_df)
